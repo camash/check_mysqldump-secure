@@ -234,7 +234,7 @@ check_tmpwatch_del_date() {
 # Parameter Check
 #
 ################################################################################
-if [ $# -lt 1 ] || [ $# -gt 7 ]; then
+if [ $# -lt 1 ] || [ $# -gt 8 ]; then
 	printf "Invalid number of arguments.\n"
 	usage
 	exit $EXIT_UNKNOWN
@@ -293,6 +293,9 @@ for arg in "$@"; do
 		-v*)
 			CHECK_VERSION="$(echo "${arg}" | sed 's/-v//')"
 			;;
+        -p*)
+            CHECK_SIZE="$(echo "${arg}" | sed 's/-p//')"
+            ;;
 		*)
 			printf "Invalid argument: \"%s\"\n" "${arg}"
 			usage
@@ -323,6 +326,20 @@ if [ ! -r "${CHECK_LOGFILE}" ]; then
 	exit $EXIT_UNKNOWN
 fi
 
+# Logfile-for file size
+if [ -z $CHECK_SIZE ]; then
+	echo "Arg \"-f\" is required."
+	usage
+	exit $EXIT_UNKNOWN
+fi
+if [ ! -f "${CHECK_SIZE}" ]; then
+	echo "File does not exist in: ${CHECK_SIZE}"
+	exit $EXIT_UNKNOWN
+fi
+if [ ! -r "${CHECK_SIZE}" ]; then
+	echo "${CHECK_SIZE} is not readable"
+	exit $EXIT_UNKNOWN
+fi
 
 
 ################################################################################
@@ -365,6 +382,7 @@ STATUS_DB_IGNORED="$(ini_get "${STATUS_FILE}" "db_ignored")"
 
 STATUS_VERSION="$(ini_get "${STATUS_FILE}" "version")"
 
+
 ################################################################################
 #
 # Validate status file
@@ -397,6 +415,38 @@ if [ "$STATUS_OPT_DEL" != "0" ] && [ "$STATUS_OPT_DEL" != "1" ]; then
 fi
 
 
+################################################################################
+#
+# Read file size
+#
+################################################################################
+
+# Log file contain file size?
+if ! grep -E "Total file size" "${CHECK_SIZE}" > /dev/null 2>&1 ; then
+	echo "${CHECK_SIZE} is corrupt. Missing: \"${w}\""
+	exit $EXIT_UNKNOWN
+fi
+
+# File size of last two backups
+SIZE_FILE="$(grep "Total file size" "${CHECK_SIZE}" | tail -2)"
+FILE_SIZE_BEFORE="$(echo "${SIZE_FILE}" | sed -n '1s/^.*Total file size.*\s\([0-9]*\)\sMB.*/\1/p')"
+FILE_SIZE_AFTER="$(echo "${SIZE_FILE}" | sed -n '2s/^.*Total file size.*\s\([0-9]*\)\sMB.*/\1/p')"
+
+################################################################################
+#
+# Validate status file
+#
+################################################################################
+
+if ! isint $FILE_SIZE_BEFORE; then
+	echo "Invalid value for \"Total file size before\". Corrupt file: ${CHECK_LOGFILE}"
+	exit $EXIT_UNKNOWN
+fi
+
+if ! isint $FILE_SIZE_AFTER; then
+	echo "Invalid value for \"Total file size after\". Corrupt file: ${CHECK_LOGFILE}"
+	exit $EXIT_UNKNOWN
+fi
 
 ################################################################################
 #
@@ -468,17 +518,23 @@ PERFORMANCE="${PERFORMANCE} 'Tmpwatch Deletions'=${STATUS_MSG_DEL};;;;"
 ADDITIONAL="Message: ${STATUS_MESSAGE}\n"
 ADDITIONAL="${ADDITIONAL}Logging: ${STATUS_OPT_LOG}\n"
 ADDITIONAL="${ADDITIONAL}Compression: ${STATUS_OPT_COM}\n"
-ADDITIONAL="${ADDITIONAL}Encryption: ${STATUS_OPT_ENC}\n"
+#ADDITIONAL="${ADDITIONAL}Encryption: ${STATUS_OPT_ENC}\n"
 ADDITIONAL="${ADDITIONAL}TmpWatch Del: ${STATUS_OPT_DEL}\n"
 ADDITIONAL="${ADDITIONAL}DBs Dumped: ${STATUS_DB_DUMPED}\n"
-ADDITIONAL="${ADDITIONAL}DBs Ignored: ${STATUS_DB_IGNORED}\n"
+#ADDITIONAL="${ADDITIONAL}DBs Ignored: ${STATUS_DB_IGNORED}\n"
 ADDITIONAL="${ADDITIONAL}DBs Error: ${STATUS_DB_ERROR}\n"
+ADDITIONAL="${ADDITIONAL}Size Compare: ${FILE_SIZE_BEFORE} => ${FILE_SIZE_AFTER}\n"
 
 
 
 #### Output
 if [ "$STATUS_SUCCESS" = "0" ]; then
-	ERROR="${ERROR}$(printf "[OK]: Dumped %s/%s dbs (%sMB) (took: %ss) %s ago." "${STATUS_MSG_DBS}" "$(expr $STATUS_MSG_DBS + $STATUS_MSG_IGN + $STATUS_MSG_ERR)" "${STATUS_MSG_MEG}" "${STATUS_MSG_SEC}" "${hours_ago}")"
+    if [ $FILE_SIZE_BEFORE -le $FILE_SIZE_AFTER ]; then
+	    ERROR="${ERROR}$(printf "[OK]: Dumped %s/%s dbs (%sMB) (took: %ss) %s ago." "${STATUS_MSG_DBS}" "$(expr $STATUS_MSG_DBS + $STATUS_MSG_IGN + $STATUS_MSG_ERR)" "${STATUS_MSG_MEG}" "${STATUS_MSG_SEC}" "${hours_ago}")"
+    else
+		ERRNO=$EXIT_WARN
+	    ERROR="${ERROR}$(printf "[Warn]: Dumped with warnings: %s/%s dbs (%sMB) (took: %ss) %s ago." "${STATUS_MSG_DBS}" "$(expr $STATUS_MSG_DBS + $STATUS_MSG_IGN + $STATUS_MSG_ERR)" "${STATUS_MSG_MEG}" "${STATUS_MSG_SEC}" "${hours_ago}")"
+    fi
 elif [ "$STATUS_SUCCESS" = "1" ]; then
 	if [ $ERRNO -lt $EXIT_ERR ]; then
 		ERRNO=$EXIT_WARN
